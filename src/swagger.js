@@ -81,12 +81,14 @@ const swaggerSpec = {
       },
       Connection: {
         type: 'object',
+        description: 'Returned so the owning user can connect directly to this DB target. Only ever returned to the connection\'s own USER_ID; serve this API over HTTPS only.',
         properties: {
           SITE: { type: 'string' },
           IP: { type: 'string' },
           PORT: { type: 'string' },
           SERVICE_NAME: { type: 'string' },
           USER_NAME: { type: 'string' },
+          PASSWORD: { type: 'string' },
           USER_ID: { type: 'integer', nullable: true },
         },
       },
@@ -99,8 +101,7 @@ const swaggerSpec = {
           port: { type: 'string' },
           serviceName: { type: 'string' },
           userName: { type: 'string' },
-          password: { type: 'string', description: 'Write-only. Never returned by the API.' },
-          userId: { type: 'integer' },
+          password: { type: 'string' },
         },
       },
       ConnectionUpdateRequest: {
@@ -111,7 +112,6 @@ const swaggerSpec = {
           serviceName: { type: 'string' },
           userName: { type: 'string' },
           password: { type: 'string' },
-          userId: { type: 'integer' },
         },
       },
       Device: {
@@ -215,7 +215,7 @@ const swaggerSpec = {
         summary: 'Create a connection',
         security: [{ bearerAuth: [] }],
         requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/ConnectionCreateRequest' } } } },
-        responses: { 201: { description: 'Created' }, 400: { description: 'Missing site' }, 401: { description: 'Unauthorized' } },
+        responses: { 201: { description: 'Created' }, 400: { description: 'Missing site' }, 401: { description: 'Unauthorized' }, 409: { description: 'A connection with this site already exists' } },
       },
     },
     '/connections/{site}': {

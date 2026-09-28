@@ -54,6 +54,9 @@ async function create(req, res, next) {
       res.status(201).json({ message: 'Connection created', site });
     });
   } catch (err) {
+    if (err.message && err.message.includes('ORA-00001')) {
+      return res.status(409).json({ error: `A connection with site "${req.body.site}" already exists` });
+    }
     next(err);
   }
 }
