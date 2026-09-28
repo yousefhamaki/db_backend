@@ -1,6 +1,6 @@
 const { withConnection } = require('../db/pool');
 
-const SAFE_COLUMNS = 'SITE, IP, PORT, SERVICE_NAME, USER_NAME, USER_ID';
+const SAFE_COLUMNS = 'SITE, IP, PORT, SERVICE_NAME, USER_NAME, PASSWORD, USER_ID';
 
 async function list(req, res, next) {
   try {
