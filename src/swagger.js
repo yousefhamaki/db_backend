@@ -83,6 +83,7 @@ const swaggerSpec = {
         type: 'object',
         description: 'Returned so the owning user can connect directly to this DB target. Only ever returned to the connection\'s own USER_ID; serve this API over HTTPS only.',
         properties: {
+          CONNECTION_ID: { type: 'integer' },
           SITE: { type: 'string' },
           IP: { type: 'string' },
           PORT: { type: 'string' },
@@ -96,7 +97,7 @@ const swaggerSpec = {
         type: 'object',
         required: ['site'],
         properties: {
-          site: { type: 'string' },
+          site: { type: 'string', description: 'Must be unique among this user\'s own connections' },
           ip: { type: 'string' },
           port: { type: 'string' },
           serviceName: { type: 'string' },
@@ -107,6 +108,7 @@ const swaggerSpec = {
       ConnectionUpdateRequest: {
         type: 'object',
         properties: {
+          site: { type: 'string' },
           ip: { type: 'string' },
           port: { type: 'string' },
           serviceName: { type: 'string' },
@@ -141,6 +143,35 @@ const swaggerSpec = {
           deviceName: { type: 'string' },
           status: { type: 'string', example: 'ACTIVE' },
           lastSeen: { type: 'boolean', description: 'Pass true to stamp LAST_SEEN = now' },
+        },
+      },
+      UserPreferences: {
+        type: 'object',
+        properties: {
+          appearance: { type: 'string', enum: ['light', 'dark'] },
+          accentColor: { type: 'string', example: 'blue' },
+          contentLayoutMode: { type: 'string', enum: ['grid', 'list'] },
+          fontSize: { type: 'string', enum: ['small', 'medium', 'large'] },
+          rowsPerPage: { type: 'integer', example: 50 },
+          confirmBeforeDelete: { type: 'boolean' },
+          useMonospacedData: { type: 'boolean' },
+          showRowSeparators: { type: 'boolean' },
+          useBoldText: { type: 'boolean' },
+        },
+      },
+      UserPreferencesUpdateRequest: {
+        type: 'object',
+        description: 'All fields optional — only the fields you send are changed, the rest are left as-is.',
+        properties: {
+          appearance: { type: 'string', enum: ['light', 'dark'] },
+          accentColor: { type: 'string', example: 'blue' },
+          contentLayoutMode: { type: 'string', enum: ['grid', 'list'] },
+          fontSize: { type: 'string', enum: ['small', 'medium', 'large'] },
+          rowsPerPage: { type: 'integer', example: 50 },
+          confirmBeforeDelete: { type: 'boolean' },
+          useMonospacedData: { type: 'boolean' },
+          showRowSeparators: { type: 'boolean' },
+          useBoldText: { type: 'boolean' },
         },
       },
     },
@@ -218,12 +249,12 @@ const swaggerSpec = {
         responses: { 201: { description: 'Created' }, 400: { description: 'Missing site' }, 401: { description: 'Unauthorized' }, 409: { description: 'A connection with this site already exists' } },
       },
     },
-    '/connections/{site}': {
+    '/connections/{id}': {
       get: {
         tags: ['Connections'],
-        summary: 'Get a connection by site',
+        summary: 'Get a connection by id',
         security: [{ bearerAuth: [] }],
-        parameters: [{ name: 'site', in: 'path', required: true, schema: { type: 'string' } }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'integer' } }],
         responses: {
           200: { description: 'OK', content: { 'application/json': { schema: { $ref: '#/components/schemas/Connection' } } } },
           404: { description: 'Not found' },
@@ -233,15 +264,15 @@ const swaggerSpec = {
         tags: ['Connections'],
         summary: 'Update a connection',
         security: [{ bearerAuth: [] }],
-        parameters: [{ name: 'site', in: 'path', required: true, schema: { type: 'string' } }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'integer' } }],
         requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/ConnectionUpdateRequest' } } } },
-        responses: { 200: { description: 'Updated' }, 404: { description: 'Not found' } },
+        responses: { 200: { description: 'Updated' }, 404: { description: 'Not found' }, 409: { description: 'Site name already used by another of your connections' } },
       },
       delete: {
         tags: ['Connections'],
         summary: 'Delete a connection',
         security: [{ bearerAuth: [] }],
-        parameters: [{ name: 'site', in: 'path', required: true, schema: { type: 'string' } }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'integer' } }],
         responses: { 204: { description: 'Deleted' }, 404: { description: 'Not found' } },
       },
     },
@@ -292,6 +323,26 @@ const swaggerSpec = {
         security: [{ bearerAuth: [] }],
         parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'integer' } }],
         responses: { 204: { description: 'Deleted' }, 404: { description: 'Not found' } },
+      },
+    },
+    '/preferences': {
+      get: {
+        tags: ['Preferences'],
+        summary: 'Get the current user\'s UI preferences (defaults if never saved)',
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: { description: 'OK', content: { 'application/json': { schema: { $ref: '#/components/schemas/UserPreferences' } } } },
+        },
+      },
+      put: {
+        tags: ['Preferences'],
+        summary: 'Update the current user\'s UI preferences (partial update, upserts)',
+        security: [{ bearerAuth: [] }],
+        requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/UserPreferencesUpdateRequest' } } } },
+        responses: {
+          200: { description: 'OK', content: { 'application/json': { schema: { $ref: '#/components/schemas/UserPreferences' } } } },
+          400: { description: 'Invalid field value' },
+        },
       },
     },
   },

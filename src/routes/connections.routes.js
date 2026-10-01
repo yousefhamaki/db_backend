@@ -6,9 +6,9 @@ const router = Router();
 router.use(authenticate);
 
 router.get('/', ctrl.list);
-router.get('/:site', ctrl.get);
+router.get('/:id', ctrl.get);
 router.post('/', ctrl.create);
-router.put('/:site', ctrl.update);
-router.delete('/:site', ctrl.remove);
+router.put('/:id', ctrl.update);
+router.delete('/:id', ctrl.remove);
 
 module.exports = router;

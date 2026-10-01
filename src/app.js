@@ -6,6 +6,7 @@ const swaggerSpec = require('./swagger');
 const authRoutes = require('./routes/auth.routes');
 const connectionsRoutes = require('./routes/connections.routes');
 const devicesRoutes = require('./routes/devices.routes');
+const preferencesRoutes = require('./routes/preferences.routes');
 
 const app = express();
 app.use(cors());
@@ -19,6 +20,7 @@ app.get('/api-docs.json', (req, res) => res.json(swaggerSpec));
 app.use('/api/auth', authRoutes);
 app.use('/api/connections', connectionsRoutes);
 app.use('/api/devices', devicesRoutes);
+app.use('/api/preferences', preferencesRoutes);
 
 app.use((req, res) => res.status(404).json({ error: 'Not found' }));
 
