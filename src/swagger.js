@@ -93,6 +93,28 @@ const swaggerSpec = {
           USER_ID: { type: 'integer', nullable: true },
         },
       },
+      GroupedConnectionCredential: {
+        type: 'object',
+        properties: {
+          connectionId: { type: 'integer' },
+          username: { type: 'string' },
+          password: { type: 'string' },
+        },
+      },
+      GroupedConnection: {
+        type: 'object',
+        properties: {
+          connectionId: { type: 'integer' },
+          site: { type: 'string' },
+          ip: { type: 'string' },
+          port: { type: 'string' },
+          service_name: { type: 'string' },
+          data: {
+            type: 'array',
+            items: { $ref: '#/components/schemas/GroupedConnectionCredential' },
+          },
+        },
+      },
       ConnectionCreateRequest: {
         type: 'object',
         required: ['site'],
@@ -229,6 +251,37 @@ const swaggerSpec = {
         summary: 'Revoke a refresh token',
         requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/LogoutRequest' } } } },
         responses: { 200: { description: 'OK' } },
+      },
+    },
+    '/connections/by-site': {
+      get: {
+        tags: ['Connections'],
+        summary: 'List connections grouped by site',
+        description: 'Returns connections grouped by site. When multiple connections share the same site, their credentials appear under data: [{ connectionId, username, password }].',
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: 'site', in: 'query', required: false, schema: { type: 'string' }, description: 'Optional site name to filter by' },
+        ],
+        responses: {
+          200: {
+            description: 'OK',
+            content: { 'application/json': { schema: { type: 'array', items: { $ref: '#/components/schemas/GroupedConnection' } } } },
+          },
+          401: { description: 'Unauthorized' },
+        },
+      },
+    },
+    '/connections/by-site/{site}': {
+      get: {
+        tags: ['Connections'],
+        summary: 'Get connections for a specific site',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'site', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: { description: 'OK', content: { 'application/json': { schema: { $ref: '#/components/schemas/GroupedConnection' } } } },
+          404: { description: 'Not found' },
+          401: { description: 'Unauthorized' },
+        },
       },
     },
     '/connections': {

@@ -20,7 +20,41 @@ function handleDbError(err, req, res) {
   return false;
 }
 
+function groupConnectionsBySite(rows) {
+  const groupsMap = new Map();
+
+  for (const row of rows) {
+    const siteKey = (row.SITE || '').trim().toLowerCase();
+    if (!groupsMap.has(siteKey)) {
+      groupsMap.set(siteKey, {
+        connectionId: row.CONNECTION_ID,
+        site: row.SITE,
+        ip: row.IP,
+        port: row.PORT,
+        service_name: row.SERVICE_NAME,
+        data: [],
+      });
+    }
+
+    const group = groupsMap.get(siteKey);
+    if (!group.ip && row.IP) group.ip = row.IP;
+    if (!group.port && row.PORT) group.port = row.PORT;
+    if (!group.service_name && row.SERVICE_NAME) group.service_name = row.SERVICE_NAME;
+
+    group.data.push({
+      connectionId: row.CONNECTION_ID,
+      username: row.USER_NAME,
+      password: row.PASSWORD,
+    });
+  }
+
+  return Array.from(groupsMap.values());
+}
+
 async function list(req, res, next) {
+  if (req.query.groupBy === 'site' || req.query.bySite === 'true') {
+    return listBySite(req, res, next);
+  }
   try {
     await withConnection(async (conn) => {
       const result = await conn.execute(
@@ -34,12 +68,57 @@ async function list(req, res, next) {
   }
 }
 
+async function listBySite(req, res, next) {
+  try {
+    const { site } = req.query;
+    await withConnection(async (conn) => {
+      let query = `SELECT ${SAFE_COLUMNS} FROM CONNECTIONS WHERE USER_ID = :userId`;
+      const binds = { userId: req.user.userId };
+
+      if (site) {
+        query += ` AND LOWER(SITE) = LOWER(:site)`;
+        binds.site = site.trim();
+      }
+
+      query += ` ORDER BY SITE, CONNECTION_ID`;
+
+      const result = await conn.execute(query, binds);
+      res.json(groupConnectionsBySite(result.rows));
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getBySite(req, res, next) {
+  try {
+    const site = req.params.site || req.params.id;
+    if (!site) return res.status(400).json({ error: 'site is required' });
+
+    await withConnection(async (conn) => {
+      const result = await conn.execute(
+        `SELECT ${SAFE_COLUMNS} FROM CONNECTIONS WHERE USER_ID = :userId AND LOWER(SITE) = LOWER(:site) ORDER BY CONNECTION_ID`,
+        { userId: req.user.userId, site: site.trim() }
+      );
+      if (!result.rows.length) return res.status(404).json({ error: `Connection for site "${site}" not found` });
+      const grouped = groupConnectionsBySite(result.rows);
+      res.json(grouped[0]);
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function get(req, res, next) {
   try {
+    const { id } = req.params;
+    if (isNaN(Number(id))) {
+      return getBySite(req, res, next);
+    }
     await withConnection(async (conn) => {
       const result = await conn.execute(
         `SELECT ${SAFE_COLUMNS} FROM CONNECTIONS WHERE CONNECTION_ID = :id AND USER_ID = :userId`,
-        { id: req.params.id, userId: req.user.userId }
+        { id, userId: req.user.userId }
       );
       if (!result.rows.length) return res.status(404).json({ error: 'Not found' });
       res.json(result.rows[0]);
@@ -131,4 +210,4 @@ async function remove(req, res, next) {
   }
 }
 
-module.exports = { list, get, create, update, remove };
+module.exports = { list, listBySite, get, getBySite, create, update, remove };
