@@ -112,7 +112,7 @@ const swaggerSpec = {
         type: 'object',
         required: ['site'],
         properties: {
-          site: { type: 'string', description: 'Must be unique among this user\'s own connections' },
+          site: { type: 'string', description: 'If you already have a site with this name, the credentials are added to it (ip / port / service name must match or be omitted)' },
           ip: { type: 'string' },
           port: { type: 'string' },
           serviceName: { type: 'string' },
@@ -273,14 +273,16 @@ const swaggerSpec = {
       },
       post: {
         tags: ['Connections'],
-        summary: 'Create a connection, optionally with its credentials',
+        summary: 'Create a connection, or add credentials to one you already have',
+        description: 'If you already have a site with this name (case-insensitive) and the ip / port / service name you send match it (or are omitted), the credentials are added to that existing site and `200` is returned. Otherwise a new site is created and `201` is returned.',
         security: [{ bearerAuth: [] }],
         requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/ConnectionCreateRequest' } } } },
         responses: {
-          201: { description: 'Created', content: { 'application/json': { schema: { $ref: '#/components/schemas/Connection' } } } },
+          200: { description: 'Site already existed: credentials were added to it', content: { 'application/json': { schema: { $ref: '#/components/schemas/Connection' } } } },
+          201: { description: 'New site created', content: { 'application/json': { schema: { $ref: '#/components/schemas/Connection' } } } },
           400: { description: 'Missing site, or a credential without a username' },
           401: { description: 'Unauthorized' },
-          409: { description: 'You already have a connection with that site name, or duplicate usernames in data' },
+          409: { description: 'Site exists with a different ip / port / service name, site exists and no credentials were sent, or a username already exists on the site' },
         },
       },
     },

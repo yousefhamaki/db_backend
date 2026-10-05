@@ -75,6 +75,10 @@ async function fetchSites(conn, userId, { id, name } = {}) {
   return groupSites(result.rows);
 }
 
+function sameValue(a, b) {
+  return String(a).trim().toLowerCase() === String(b ?? '').trim().toLowerCase();
+}
+
 function readCredential(body) {
   const username = body.username ?? body.userName;
   return { username, password: body.password };
@@ -141,21 +145,50 @@ async function create(req, res, next) {
 
     await withConnection(async (conn) => {
       try {
-        const insert = await conn.execute(
-          `INSERT INTO SITES (USER_ID, SITE_NAME, IP, PORT, SERVICE_NAME)
-           VALUES (:userId, :site, :ip, :port, :serviceName)
-           RETURNING SITE_ID INTO :siteId`,
-          {
-            userId: req.user.userId,
-            site,
-            ip: ip || null,
-            port: port || null,
-            serviceName: serviceName || serviceNameSnake || null,
-            siteId: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER },
-          },
-          { autoCommit: false }
+        const givenServiceName = serviceName || serviceNameSnake;
+        const existing = await conn.execute(
+          `SELECT SITE_ID, IP, PORT, SERVICE_NAME FROM SITES
+           WHERE USER_ID = :userId AND LOWER(SITE_NAME) = LOWER(:site)`,
+          { userId: req.user.userId, site: String(site).trim() }
         );
-        const siteId = insert.outBinds.siteId[0];
+
+        let siteId;
+        let merged = false;
+        if (existing.rows.length) {
+          const row = existing.rows[0];
+          const mismatched = [
+            ['ip', ip, row.IP],
+            ['port', port, row.PORT],
+            ['service_name', givenServiceName, row.SERVICE_NAME],
+          ].filter(([, given, current]) => given && !sameValue(given, current)).map(([name]) => name);
+
+          if (mismatched.length) {
+            return res.status(409).json({
+              error: `Site "${site}" already exists with a different ${mismatched.join(', ')}`,
+            });
+          }
+          if (!credentials.length) {
+            return res.status(409).json({ error: 'You already have a connection with that site name' });
+          }
+          siteId = row.SITE_ID;
+          merged = true;
+        } else {
+          const insert = await conn.execute(
+            `INSERT INTO SITES (USER_ID, SITE_NAME, IP, PORT, SERVICE_NAME)
+             VALUES (:userId, :site, :ip, :port, :serviceName)
+             RETURNING SITE_ID INTO :siteId`,
+            {
+              userId: req.user.userId,
+              site,
+              ip: ip || null,
+              port: port || null,
+              serviceName: givenServiceName || null,
+              siteId: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER },
+            },
+            { autoCommit: false }
+          );
+          siteId = insert.outBinds.siteId[0];
+        }
 
         for (const c of credentials) {
           await conn.execute(
@@ -167,8 +200,8 @@ async function create(req, res, next) {
         }
         await conn.commit();
 
-        const [created] = await fetchSites(conn, req.user.userId, { id: siteId });
-        res.status(201).json(created);
+        const [saved] = await fetchSites(conn, req.user.userId, { id: siteId });
+        res.status(merged ? 200 : 201).json(saved);
       } catch (err) {
         await conn.rollback();
         throw err;
