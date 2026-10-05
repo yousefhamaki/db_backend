@@ -6,11 +6,15 @@ const router = Router();
 router.use(authenticate);
 
 router.get('/', ctrl.list);
-router.get('/by-site', ctrl.listBySite);
+router.get('/by-site', ctrl.list);
 router.get('/by-site/:site', ctrl.getBySite);
 router.get('/:id', ctrl.get);
 router.post('/', ctrl.create);
 router.put('/:id', ctrl.update);
 router.delete('/:id', ctrl.remove);
+
+router.post('/:id/credentials', ctrl.addCredential);
+router.put('/:id/credentials/:credentialId', ctrl.updateCredential);
+router.delete('/:id/credentials/:credentialId', ctrl.removeCredential);
 
 module.exports = router;

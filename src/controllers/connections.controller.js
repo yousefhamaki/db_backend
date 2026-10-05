@@ -1,89 +1,94 @@
+const oracledb = require('oracledb');
 const { withConnection } = require('../db/pool');
 
-const SAFE_COLUMNS = 'CONNECTION_ID, SITE, IP, PORT, SERVICE_NAME, USER_NAME, PASSWORD, USER_ID';
+const SELECT_SITES = `
+  SELECT s.SITE_ID, s.SITE_NAME, s.IP, s.PORT, s.SERVICE_NAME,
+         c.CREDENTIAL_ID, c.USER_NAME, c.PASSWORD
+  FROM SITES s
+  LEFT JOIN SITE_CREDENTIALS c ON c.SITE_ID = s.SITE_ID
+  WHERE s.USER_ID = :userId`;
+const ORDER_SITES = ' ORDER BY s.SITE_NAME, c.CREDENTIAL_ID';
 
-// Maps common Oracle input errors to clear 4xx responses instead of a raw 500.
+function toId(value) {
+  const n = Number(value);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+// Maps common Oracle errors to clear 4xx responses instead of a raw 500.
 // Returns true if it handled the error (and already sent a response).
-function handleDbError(err, req, res) {
-  if (err.message && err.message.includes('ORA-00001')) {
-    res.status(409).json({ error: `A connection with site "${req.body.site}" already exists` });
+function handleDbError(err, res) {
+  const msg = err.message || '';
+  if (msg.includes('ORA-00001')) {
+    const error = msg.includes('UQ_CREDENTIALS_SITE_USER')
+      ? 'This site already has a credential with that username'
+      : 'You already have a connection with that site name';
+    res.status(409).json({ error });
     return true;
   }
-  if (err.message && err.message.includes('ORA-12899')) {
-    res.status(400).json({ error: 'A field value is too long for its column', detail: err.message.split('\n')[0] });
+  if (msg.includes('ORA-12899')) {
+    res.status(400).json({ error: 'A field value is too long for its column', detail: msg.split('\n')[0] });
     return true;
   }
-  if (err.message && (err.message.includes('ORA-01400') || err.message.includes('ORA-01407'))) {
-    res.status(400).json({ error: 'A required field is missing', detail: err.message.split('\n')[0] });
+  if (msg.includes('ORA-01400') || msg.includes('ORA-01407')) {
+    res.status(400).json({ error: 'A required field is missing', detail: msg.split('\n')[0] });
     return true;
   }
   return false;
 }
 
-function groupConnectionsBySite(rows) {
-  const groupsMap = new Map();
-
+function groupSites(rows) {
+  const sites = new Map();
   for (const row of rows) {
-    const siteKey = (row.SITE || '').trim().toLowerCase();
-    if (!groupsMap.has(siteKey)) {
-      groupsMap.set(siteKey, {
-        connectionId: row.CONNECTION_ID,
-        site: row.SITE,
+    if (!sites.has(row.SITE_ID)) {
+      sites.set(row.SITE_ID, {
+        connectionId: row.SITE_ID,
+        site: row.SITE_NAME,
         ip: row.IP,
         port: row.PORT,
         service_name: row.SERVICE_NAME,
         data: [],
       });
     }
-
-    const group = groupsMap.get(siteKey);
-    if (!group.ip && row.IP) group.ip = row.IP;
-    if (!group.port && row.PORT) group.port = row.PORT;
-    if (!group.service_name && row.SERVICE_NAME) group.service_name = row.SERVICE_NAME;
-
-    group.data.push({
-      connectionId: row.CONNECTION_ID,
-      username: row.USER_NAME,
-      password: row.PASSWORD,
-    });
+    if (row.CREDENTIAL_ID !== null) {
+      sites.get(row.SITE_ID).data.push({
+        credentialId: row.CREDENTIAL_ID,
+        username: row.USER_NAME,
+        password: row.PASSWORD,
+      });
+    }
   }
+  return [...sites.values()];
+}
 
-  return Array.from(groupsMap.values());
+async function fetchSites(conn, userId, { id, name } = {}) {
+  let sql = SELECT_SITES;
+  const binds = { userId };
+  if (id) {
+    sql += ' AND s.SITE_ID = :id';
+    binds.id = id;
+  }
+  if (name) {
+    sql += ' AND LOWER(s.SITE_NAME) = LOWER(:name)';
+    binds.name = name.trim();
+  }
+  const result = await conn.execute(sql + ORDER_SITES, binds);
+  return groupSites(result.rows);
+}
+
+function readCredential(body) {
+  const username = body.username ?? body.userName;
+  return { username, password: body.password };
+}
+
+function validCredential(c) {
+  return typeof c.username === 'string' && c.username.trim() !== '';
 }
 
 async function list(req, res, next) {
-  if (req.query.groupBy === 'site' || req.query.bySite === 'true') {
-    return listBySite(req, res, next);
-  }
   try {
     await withConnection(async (conn) => {
-      const result = await conn.execute(
-        `SELECT ${SAFE_COLUMNS} FROM CONNECTIONS WHERE USER_ID = :userId ORDER BY SITE`,
-        { userId: req.user.userId }
-      );
-      res.json(result.rows);
-    });
-  } catch (err) {
-    next(err);
-  }
-}
-
-async function listBySite(req, res, next) {
-  try {
-    const { site } = req.query;
-    await withConnection(async (conn) => {
-      let query = `SELECT ${SAFE_COLUMNS} FROM CONNECTIONS WHERE USER_ID = :userId`;
-      const binds = { userId: req.user.userId };
-
-      if (site) {
-        query += ` AND LOWER(SITE) = LOWER(:site)`;
-        binds.site = site.trim();
-      }
-
-      query += ` ORDER BY SITE, CONNECTION_ID`;
-
-      const result = await conn.execute(query, binds);
-      res.json(groupConnectionsBySite(result.rows));
+      const name = typeof req.query.site === 'string' ? req.query.site : undefined;
+      res.json(await fetchSites(conn, req.user.userId, { name }));
     });
   } catch (err) {
     next(err);
@@ -92,17 +97,11 @@ async function listBySite(req, res, next) {
 
 async function getBySite(req, res, next) {
   try {
-    const site = req.params.site || req.params.id;
-    if (!site) return res.status(400).json({ error: 'site is required' });
-
+    const name = req.params.site;
     await withConnection(async (conn) => {
-      const result = await conn.execute(
-        `SELECT ${SAFE_COLUMNS} FROM CONNECTIONS WHERE USER_ID = :userId AND LOWER(SITE) = LOWER(:site) ORDER BY CONNECTION_ID`,
-        { userId: req.user.userId, site: site.trim() }
-      );
-      if (!result.rows.length) return res.status(404).json({ error: `Connection for site "${site}" not found` });
-      const grouped = groupConnectionsBySite(result.rows);
-      res.json(grouped[0]);
+      const [site] = await fetchSites(conn, req.user.userId, { name });
+      if (!site) return res.status(404).json({ error: `Connection for site "${name}" not found` });
+      res.json(site);
     });
   } catch (err) {
     next(err);
@@ -110,18 +109,16 @@ async function getBySite(req, res, next) {
 }
 
 async function get(req, res, next) {
+  const id = toId(req.params.id);
+  if (!id) {
+    req.params.site = req.params.id;
+    return getBySite(req, res, next);
+  }
   try {
-    const { id } = req.params;
-    if (isNaN(Number(id))) {
-      return getBySite(req, res, next);
-    }
     await withConnection(async (conn) => {
-      const result = await conn.execute(
-        `SELECT ${SAFE_COLUMNS} FROM CONNECTIONS WHERE CONNECTION_ID = :id AND USER_ID = :userId`,
-        { id, userId: req.user.userId }
-      );
-      if (!result.rows.length) return res.status(404).json({ error: 'Not found' });
-      res.json(result.rows[0]);
+      const [site] = await fetchSites(conn, req.user.userId, { id });
+      if (!site) return res.status(404).json({ error: 'Not found' });
+      res.json(site);
     });
   } catch (err) {
     next(err);
@@ -130,76 +127,103 @@ async function get(req, res, next) {
 
 async function create(req, res, next) {
   try {
-    const { site, ip, port, serviceName, userName, password } = req.body;
+    const { site, ip, port, serviceName, service_name: serviceNameSnake, data } = req.body;
     if (!site) return res.status(400).json({ error: 'site is required' });
 
+    const credentials = [];
+    if (Array.isArray(data)) credentials.push(...data.map(readCredential));
+    if (req.body.userName !== undefined || req.body.password !== undefined) {
+      credentials.push(readCredential(req.body));
+    }
+    if (!credentials.every(validCredential)) {
+      return res.status(400).json({ error: 'every credential needs a non-empty username' });
+    }
+
     await withConnection(async (conn) => {
-      const oracledb = require('oracledb');
-      const insertRes = await conn.execute(
-        `INSERT INTO CONNECTIONS (SITE, IP, PORT, SERVICE_NAME, USER_NAME, PASSWORD, USER_ID)
-         VALUES (:site, :ip, :port, :serviceName, :userName, :password, :userId)
-         RETURNING CONNECTION_ID INTO :connectionId`,
-        {
-          site,
-          ip: ip || null,
-          port: port || null,
-          serviceName: serviceName || null,
-          userName: userName || null,
-          password: password || null,
-          userId: req.user.userId,
-          connectionId: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER },
-        },
-        { autoCommit: true }
-      );
-      res.status(201).json({
-        message: 'Connection created',
-        connectionId: insertRes.outBinds.connectionId[0],
-        site,
-      });
+      try {
+        const insert = await conn.execute(
+          `INSERT INTO SITES (USER_ID, SITE_NAME, IP, PORT, SERVICE_NAME)
+           VALUES (:userId, :site, :ip, :port, :serviceName)
+           RETURNING SITE_ID INTO :siteId`,
+          {
+            userId: req.user.userId,
+            site,
+            ip: ip || null,
+            port: port || null,
+            serviceName: serviceName || serviceNameSnake || null,
+            siteId: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER },
+          },
+          { autoCommit: false }
+        );
+        const siteId = insert.outBinds.siteId[0];
+
+        for (const c of credentials) {
+          await conn.execute(
+            `INSERT INTO SITE_CREDENTIALS (SITE_ID, USER_NAME, PASSWORD)
+             VALUES (:siteId, :username, :password)`,
+            { siteId, username: c.username, password: c.password || null },
+            { autoCommit: false }
+          );
+        }
+        await conn.commit();
+
+        const [created] = await fetchSites(conn, req.user.userId, { id: siteId });
+        res.status(201).json(created);
+      } catch (err) {
+        await conn.rollback();
+        throw err;
+      }
     });
   } catch (err) {
-    if (handleDbError(err, req, res)) return;
+    if (handleDbError(err, res)) return;
     next(err);
   }
 }
 
 async function update(req, res, next) {
   try {
-    const { site, ip, port, serviceName, userName, password } = req.body;
-    const id = req.params.id;
+    const id = toId(req.params.id);
+    if (!id) return res.status(400).json({ error: 'id must be a positive integer' });
+
+    const { site, ip, port, serviceName, service_name: serviceNameSnake } = req.body;
+    if (req.body.userName !== undefined || req.body.password !== undefined || req.body.data !== undefined) {
+      return res.status(400).json({ error: 'Change credentials through /api/connections/:id/credentials' });
+    }
 
     const fields = [];
     const binds = { id, userId: req.user.userId };
-    if (site !== undefined) { fields.push('SITE = :site'); binds.site = site; }
+    if (site !== undefined) { fields.push('SITE_NAME = :site'); binds.site = site; }
     if (ip !== undefined) { fields.push('IP = :ip'); binds.ip = ip; }
     if (port !== undefined) { fields.push('PORT = :port'); binds.port = port; }
-    if (serviceName !== undefined) { fields.push('SERVICE_NAME = :serviceName'); binds.serviceName = serviceName; }
-    if (userName !== undefined) { fields.push('USER_NAME = :userName'); binds.userName = userName; }
-    if (password !== undefined) { fields.push('PASSWORD = :password'); binds.password = password; }
-
+    const svc = serviceName !== undefined ? serviceName : serviceNameSnake;
+    if (svc !== undefined) { fields.push('SERVICE_NAME = :serviceName'); binds.serviceName = svc; }
     if (!fields.length) return res.status(400).json({ error: 'No fields to update' });
 
     await withConnection(async (conn) => {
       const result = await conn.execute(
-        `UPDATE CONNECTIONS SET ${fields.join(', ')} WHERE CONNECTION_ID = :id AND USER_ID = :userId`,
+        `UPDATE SITES SET ${fields.join(', ')} WHERE SITE_ID = :id AND USER_ID = :userId`,
         binds,
         { autoCommit: true }
       );
       if (result.rowsAffected === 0) return res.status(404).json({ error: 'Not found' });
-      res.json({ message: 'Connection updated', connectionId: Number(id) });
+      const [updated] = await fetchSites(conn, req.user.userId, { id });
+      res.json(updated);
     });
   } catch (err) {
-    if (handleDbError(err, req, res)) return;
+    if (handleDbError(err, res)) return;
     next(err);
   }
 }
 
 async function remove(req, res, next) {
   try {
+    const id = toId(req.params.id);
+    if (!id) return res.status(400).json({ error: 'id must be a positive integer' });
+
     await withConnection(async (conn) => {
       const result = await conn.execute(
-        `DELETE FROM CONNECTIONS WHERE CONNECTION_ID = :id AND USER_ID = :userId`,
-        { id: req.params.id, userId: req.user.userId },
+        `DELETE FROM SITES WHERE SITE_ID = :id AND USER_ID = :userId`,
+        { id, userId: req.user.userId },
         { autoCommit: true }
       );
       if (result.rowsAffected === 0) return res.status(404).json({ error: 'Not found' });
@@ -210,4 +234,117 @@ async function remove(req, res, next) {
   }
 }
 
-module.exports = { list, listBySite, get, getBySite, create, update, remove };
+async function addCredential(req, res, next) {
+  try {
+    const id = toId(req.params.id);
+    if (!id) return res.status(400).json({ error: 'id must be a positive integer' });
+
+    const credential = readCredential(req.body);
+    if (!validCredential(credential)) return res.status(400).json({ error: 'username is required' });
+
+    await withConnection(async (conn) => {
+      const owned = await conn.execute(
+        `SELECT 1 FROM SITES WHERE SITE_ID = :id AND USER_ID = :userId`,
+        { id, userId: req.user.userId }
+      );
+      if (!owned.rows.length) return res.status(404).json({ error: 'Not found' });
+
+      const insert = await conn.execute(
+        `INSERT INTO SITE_CREDENTIALS (SITE_ID, USER_NAME, PASSWORD)
+         VALUES (:id, :username, :password)
+         RETURNING CREDENTIAL_ID INTO :credentialId`,
+        {
+          id,
+          username: credential.username,
+          password: credential.password || null,
+          credentialId: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER },
+        },
+        { autoCommit: true }
+      );
+      res.status(201).json({
+        credentialId: insert.outBinds.credentialId[0],
+        username: credential.username,
+        password: credential.password || null,
+      });
+    });
+  } catch (err) {
+    if (handleDbError(err, res)) return;
+    next(err);
+  }
+}
+
+async function updateCredential(req, res, next) {
+  try {
+    const id = toId(req.params.id);
+    const credentialId = toId(req.params.credentialId);
+    if (!id || !credentialId) return res.status(400).json({ error: 'ids must be positive integers' });
+
+    const { username, password } = readCredential(req.body);
+    const fields = [];
+    const binds = { id, credentialId, userId: req.user.userId };
+    if (username !== undefined) {
+      if (typeof username !== 'string' || username.trim() === '') {
+        return res.status(400).json({ error: 'username cannot be empty' });
+      }
+      fields.push('USER_NAME = :username');
+      binds.username = username;
+    }
+    if (password !== undefined) { fields.push('PASSWORD = :password'); binds.password = password; }
+    if (!fields.length) return res.status(400).json({ error: 'No fields to update' });
+
+    await withConnection(async (conn) => {
+      const result = await conn.execute(
+        `UPDATE SITE_CREDENTIALS SET ${fields.join(', ')}
+         WHERE CREDENTIAL_ID = :credentialId
+           AND SITE_ID IN (SELECT SITE_ID FROM SITES WHERE SITE_ID = :id AND USER_ID = :userId)`,
+        binds,
+        { autoCommit: true }
+      );
+      if (result.rowsAffected === 0) return res.status(404).json({ error: 'Not found' });
+
+      const updated = await conn.execute(
+        `SELECT CREDENTIAL_ID, USER_NAME, PASSWORD FROM SITE_CREDENTIALS WHERE CREDENTIAL_ID = :credentialId`,
+        { credentialId }
+      );
+      const row = updated.rows[0];
+      res.json({ credentialId: row.CREDENTIAL_ID, username: row.USER_NAME, password: row.PASSWORD });
+    });
+  } catch (err) {
+    if (handleDbError(err, res)) return;
+    next(err);
+  }
+}
+
+async function removeCredential(req, res, next) {
+  try {
+    const id = toId(req.params.id);
+    const credentialId = toId(req.params.credentialId);
+    if (!id || !credentialId) return res.status(400).json({ error: 'ids must be positive integers' });
+
+    await withConnection(async (conn) => {
+      const result = await conn.execute(
+        `DELETE FROM SITE_CREDENTIALS
+         WHERE CREDENTIAL_ID = :credentialId
+           AND SITE_ID IN (SELECT SITE_ID FROM SITES WHERE SITE_ID = :id AND USER_ID = :userId)`,
+        { credentialId, id, userId: req.user.userId },
+        { autoCommit: true }
+      );
+      if (result.rowsAffected === 0) return res.status(404).json({ error: 'Not found' });
+      res.status(204).send();
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = {
+  list,
+  getBySite,
+  get,
+  create,
+  update,
+  remove,
+  addCredential,
+  updateCredential,
+  removeCredential,
+};

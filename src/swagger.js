@@ -79,40 +79,33 @@ const swaggerSpec = {
         required: ['refreshToken'],
         properties: { refreshToken: { type: 'string' } },
       },
+      Credential: {
+        type: 'object',
+        description: 'One username/password pair for a site. Returned so the owning user can connect directly; serve this API over HTTPS only.',
+        properties: {
+          credentialId: { type: 'integer' },
+          username: { type: 'string' },
+          password: { type: 'string', nullable: true },
+        },
+      },
       Connection: {
         type: 'object',
-        description: 'Returned so the owning user can connect directly to this DB target. Only ever returned to the connection\'s own USER_ID; serve this API over HTTPS only.',
-        properties: {
-          CONNECTION_ID: { type: 'integer' },
-          SITE: { type: 'string' },
-          IP: { type: 'string' },
-          PORT: { type: 'string' },
-          SERVICE_NAME: { type: 'string' },
-          USER_NAME: { type: 'string' },
-          PASSWORD: { type: 'string' },
-          USER_ID: { type: 'integer', nullable: true },
-        },
-      },
-      GroupedConnectionCredential: {
-        type: 'object',
-        properties: {
-          connectionId: { type: 'integer' },
-          username: { type: 'string' },
-          password: { type: 'string' },
-        },
-      },
-      GroupedConnection: {
-        type: 'object',
+        description: 'A site (IP / port / service name) with all of its credentials. Only ever returned to the owning user.',
         properties: {
           connectionId: { type: 'integer' },
           site: { type: 'string' },
           ip: { type: 'string' },
           port: { type: 'string' },
           service_name: { type: 'string' },
-          data: {
-            type: 'array',
-            items: { $ref: '#/components/schemas/GroupedConnectionCredential' },
-          },
+          data: { type: 'array', items: { $ref: '#/components/schemas/Credential' } },
+        },
+      },
+      CredentialInput: {
+        type: 'object',
+        required: ['username'],
+        properties: {
+          username: { type: 'string' },
+          password: { type: 'string' },
         },
       },
       ConnectionCreateRequest: {
@@ -123,18 +116,29 @@ const swaggerSpec = {
           ip: { type: 'string' },
           port: { type: 'string' },
           serviceName: { type: 'string' },
-          userName: { type: 'string' },
+          data: {
+            type: 'array',
+            description: 'Optional credentials to create together with the site',
+            items: { $ref: '#/components/schemas/CredentialInput' },
+          },
+          userName: { type: 'string', description: 'Shorthand for a single credential (use with password)' },
           password: { type: 'string' },
         },
       },
       ConnectionUpdateRequest: {
         type: 'object',
+        description: 'Site fields only. Change credentials through the /credentials endpoints.',
         properties: {
           site: { type: 'string' },
           ip: { type: 'string' },
           port: { type: 'string' },
           serviceName: { type: 'string' },
-          userName: { type: 'string' },
+        },
+      },
+      CredentialUpdateRequest: {
+        type: 'object',
+        properties: {
+          username: { type: 'string' },
           password: { type: 'string' },
         },
       },
@@ -253,42 +257,15 @@ const swaggerSpec = {
         responses: { 200: { description: 'OK' } },
       },
     },
-    '/connections/by-site': {
-      get: {
-        tags: ['Connections'],
-        summary: 'List connections grouped by site',
-        description: 'Returns connections grouped by site. When multiple connections share the same site, their credentials appear under data: [{ connectionId, username, password }].',
-        security: [{ bearerAuth: [] }],
-        parameters: [
-          { name: 'site', in: 'query', required: false, schema: { type: 'string' }, description: 'Optional site name to filter by' },
-        ],
-        responses: {
-          200: {
-            description: 'OK',
-            content: { 'application/json': { schema: { type: 'array', items: { $ref: '#/components/schemas/GroupedConnection' } } } },
-          },
-          401: { description: 'Unauthorized' },
-        },
-      },
-    },
-    '/connections/by-site/{site}': {
-      get: {
-        tags: ['Connections'],
-        summary: 'Get connections for a specific site',
-        security: [{ bearerAuth: [] }],
-        parameters: [{ name: 'site', in: 'path', required: true, schema: { type: 'string' } }],
-        responses: {
-          200: { description: 'OK', content: { 'application/json': { schema: { $ref: '#/components/schemas/GroupedConnection' } } } },
-          404: { description: 'Not found' },
-          401: { description: 'Unauthorized' },
-        },
-      },
-    },
     '/connections': {
       get: {
         tags: ['Connections'],
-        summary: 'List all connections',
+        summary: 'List your connections (each site with all of its credentials)',
+        description: '`/connections/by-site` is an alias of this endpoint.',
         security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: 'site', in: 'query', required: false, schema: { type: 'string' }, description: 'Optional site name to filter by (case-insensitive)' },
+        ],
         responses: {
           200: { description: 'OK', content: { 'application/json': { schema: { type: 'array', items: { $ref: '#/components/schemas/Connection' } } } } },
           401: { description: 'Unauthorized' },
@@ -296,10 +273,28 @@ const swaggerSpec = {
       },
       post: {
         tags: ['Connections'],
-        summary: 'Create a connection',
+        summary: 'Create a connection, optionally with its credentials',
         security: [{ bearerAuth: [] }],
         requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/ConnectionCreateRequest' } } } },
-        responses: { 201: { description: 'Created' }, 400: { description: 'Missing site' }, 401: { description: 'Unauthorized' }, 409: { description: 'A connection with this site already exists' } },
+        responses: {
+          201: { description: 'Created', content: { 'application/json': { schema: { $ref: '#/components/schemas/Connection' } } } },
+          400: { description: 'Missing site, or a credential without a username' },
+          401: { description: 'Unauthorized' },
+          409: { description: 'You already have a connection with that site name, or duplicate usernames in data' },
+        },
+      },
+    },
+    '/connections/by-site/{site}': {
+      get: {
+        tags: ['Connections'],
+        summary: 'Get a connection by site name',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'site', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: { description: 'OK', content: { 'application/json': { schema: { $ref: '#/components/schemas/Connection' } } } },
+          404: { description: 'Not found' },
+          401: { description: 'Unauthorized' },
+        },
       },
     },
     '/connections/{id}': {
@@ -315,17 +310,65 @@ const swaggerSpec = {
       },
       put: {
         tags: ['Connections'],
-        summary: 'Update a connection',
+        summary: 'Update a connection\'s site fields (not its credentials)',
         security: [{ bearerAuth: [] }],
         parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'integer' } }],
         requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/ConnectionUpdateRequest' } } } },
-        responses: { 200: { description: 'Updated' }, 404: { description: 'Not found' }, 409: { description: 'Site name already used by another of your connections' } },
+        responses: {
+          200: { description: 'Updated', content: { 'application/json': { schema: { $ref: '#/components/schemas/Connection' } } } },
+          400: { description: 'No fields to update, or credential fields sent here' },
+          404: { description: 'Not found' },
+          409: { description: 'You already have a connection with that site name' },
+        },
       },
       delete: {
         tags: ['Connections'],
-        summary: 'Delete a connection',
+        summary: 'Delete a connection and all of its credentials',
         security: [{ bearerAuth: [] }],
         parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'integer' } }],
+        responses: { 204: { description: 'Deleted' }, 404: { description: 'Not found' } },
+      },
+    },
+    '/connections/{id}/credentials': {
+      post: {
+        tags: ['Connections'],
+        summary: 'Add a username/password to a connection',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'integer' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/CredentialInput' } } } },
+        responses: {
+          201: { description: 'Created', content: { 'application/json': { schema: { $ref: '#/components/schemas/Credential' } } } },
+          400: { description: 'username is required' },
+          404: { description: 'Connection not found' },
+          409: { description: 'This site already has a credential with that username' },
+        },
+      },
+    },
+    '/connections/{id}/credentials/{credentialId}': {
+      put: {
+        tags: ['Connections'],
+        summary: 'Update a credential',
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: 'id', in: 'path', required: true, schema: { type: 'integer' } },
+          { name: 'credentialId', in: 'path', required: true, schema: { type: 'integer' } },
+        ],
+        requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/CredentialUpdateRequest' } } } },
+        responses: {
+          200: { description: 'Updated', content: { 'application/json': { schema: { $ref: '#/components/schemas/Credential' } } } },
+          400: { description: 'No fields to update, or empty username' },
+          404: { description: 'Not found' },
+          409: { description: 'This site already has a credential with that username' },
+        },
+      },
+      delete: {
+        tags: ['Connections'],
+        summary: 'Delete a credential',
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: 'id', in: 'path', required: true, schema: { type: 'integer' } },
+          { name: 'credentialId', in: 'path', required: true, schema: { type: 'integer' } },
+        ],
         responses: { 204: { description: 'Deleted' }, 404: { description: 'Not found' } },
       },
     },
