@@ -1,12 +1,17 @@
 {
   "name": "db_app",
   "version": "1.0.0",
-  "main": "src/server.js",
+  "main": "dist/server.js",
   "scripts": {
-    "start": "node src/server.js",
+    "dev": "ts-node-dev --respawn --transpile-only src/server.js",
+    "build": "tsc -p tsconfig.build.json",
+    "prestart": "npm run build",
+    "start": "node dist/server.js",
+    "typecheck": "tsc --noEmit",
     "migrate": "node scripts/migrate.js",
     "inspect-db": "node scripts/inspect-db.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "jest",
+    "test:coverage": "jest --coverage"
   },
   "keywords": [],
   "author": "",
@@ -17,8 +22,20 @@
     "cors": "^2.8.6",
     "dotenv": "^18.0.4",
     "express": "^5.2.1",
+    "joi": "^18.2.9",
     "jsonwebtoken": "^9.0.3",
     "oracledb": "^7.0.1",
+    "swagger-jsdoc": "^6.3.0",
     "swagger-ui-express": "^5.0.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^26.6.4",
+    "@types/oracledb": "^7.0.3",
+    "jest": "^30.5.2",
+    "ts-jest": "^29.4.14",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.9.3"
   }
 }

@@ -1,9 +1,12 @@
+const path = require('path');
+const swaggerJsdoc = require('swagger-jsdoc');
+
 const swaggerSpec = {
   openapi: '3.0.3',
   info: {
     title: 'db_app API',
     version: '1.0.0',
-    description: 'Auth, connections and devices API backed by the Exsys Oracle DB.',
+    description: 'Auth, connections, devices, preferences and query history API backed by the Exsys Oracle DB.',
   },
   servers: [{ url: '/api' }],
   components: {
@@ -445,5 +448,14 @@ const swaggerSpec = {
     },
   },
 };
+
+// Routes written in the TypeScript standard document themselves with @openapi blocks (src/routes/*.route.ts,
+// or the compiled .js in dist/). Merge them into the hand-written spec above.
+const generated = swaggerJsdoc({
+  definition: { openapi: '3.0.3', info: { title: swaggerSpec.info.title, version: swaggerSpec.info.version } },
+  apis: ['*.route.ts', '*.route.js'].map((pattern) => path.join(__dirname, 'routes', pattern).replace(/\\/g, '/')),
+});
+Object.assign(swaggerSpec.paths, generated.paths);
+Object.assign(swaggerSpec.components.schemas, generated.components && generated.components.schemas);
 
 module.exports = swaggerSpec;
